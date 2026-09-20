@@ -47,7 +47,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       # O runner ubuntu-latest já traz o Android SDK em $ANDROID_HOME; a action setup-android
       # quebrou ao pedir o pacote 'tools' (removido do SDK). Só aceitamos as licenças.
