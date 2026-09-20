@@ -9,8 +9,8 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // O CI passa ANDROID_VERSION_CODE (número da execução) para cada build da loja
         // precisar de um versionCode maior que o anterior; localmente fica 1.
-        versionCode (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInteger()
-        versionName (System.getenv("ANDROID_VERSION_NAME") ?: "1.0")
+        versionCode ((System.getenv("ANDROID_VERSION_CODE") ?: "").isInteger() ? System.getenv("ANDROID_VERSION_CODE").toInteger() : 1)
+        versionName ((System.getenv("ANDROID_VERSION_NAME") ?: "").trim() ?: "1.0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
