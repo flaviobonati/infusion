@@ -1,0 +1,32 @@
+# Dependências
+node_modules/
+
+# Android — artefatos de build
+android/.gradle/
+android/build/
+android/app/build/
+android/.idea/
+android/local.properties
+android/*.iml
+android/app/*.iml
+android/captures/
+
+# iOS — artefatos de build e Pods
+ios/App/Pods/
+ios/App/build/
+ios/App/DerivedData/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+ios/App/App.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Segredos — nunca versionar; o CI escreve a partir de secrets
+*.keystore
+*.jks
+google-services.json
+GoogleService-Info.plist
+*.p8
+*.p12
+*.mobileprovision
+
+# Sistema
+.DS_Store

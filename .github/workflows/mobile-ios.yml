@@ -1,0 +1,180 @@
+# Build do app iOS (casca Capacitor do Infusion), exportação do IPA e envio ao TestFlight.
+#
+# Assinatura automática com chave da App Store Connect API (cloud signing do Xcode),
+# sem certificados nem perfis versionados.
+#
+# Secrets usados (Settings > Secrets and variables > Actions):
+#   ASC_KEY_ID                   Key ID da chave da App Store Connect API
+#   ASC_ISSUER_ID                Issuer ID da chave
+#   ASC_KEY_P8_BASE64            arquivo AuthKey_XXXX.p8 em base64 (`base64 -i AuthKey.p8`)
+#   APPLE_TEAM_ID                Team ID da conta de desenvolvedor (necessário à assinatura automática)
+#   IOS_GOOGLE_SERVICES_PLIST    (opcional) conteúdo do GoogleService-Info.plist; só faz sentido
+#                                se o Firebase iOS SDK for adicionado ao projeto. O push nativo do
+#                                Capacitor usa APNs diretamente e não precisa dele.
+name: Mobile iOS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**'
+      - '.github/workflows/mobile-ios.yml'
+
+concurrency:
+  group: mobile-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Arquivar, exportar e enviar ao TestFlight
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: .
+    env:
+      ARCHIVE_PATH: ${{ github.workspace }}/ios/build/App.xcarchive
+      EXPORT_PATH: ${{ github.workspace }}/ios/build/export
+      ASC_KEY_DIR: ${{ github.workspace }}/ios/build/private_keys
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Selecionar Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Dependências do Capacitor
+        run: npm ci
+
+      - name: Sincronizar projeto iOS (plugins + config)
+        run: npx cap sync ios
+
+      # O Capacitor 8 gera o projeto com Swift Package Manager (pasta ios/App/CapApp-SPM);
+      # não há Podfile. O passo abaixo só roda se um Podfile for adicionado no futuro.
+      - name: pod install (apenas se houver Podfile)
+        working-directory: ios/App
+        run: |
+          if [ -f Podfile ]; then
+            pod install --repo-update
+          else
+            echo "Sem Podfile: projeto usa Swift Package Manager."
+          fi
+
+      - name: Escrever GoogleService-Info.plist (opcional)
+        env:
+          IOS_GOOGLE_SERVICES_PLIST: ${{ secrets.IOS_GOOGLE_SERVICES_PLIST }}
+        run: |
+          if [ -n "$IOS_GOOGLE_SERVICES_PLIST" ]; then
+            printf '%s' "$IOS_GOOGLE_SERVICES_PLIST" > ios/App/App/GoogleService-Info.plist
+            echo "GoogleService-Info.plist escrito (lembre-se de adicioná-lo ao target no Xcode se usar Firebase)."
+          else
+            echo "IOS_GOOGLE_SERVICES_PLIST ausente: seguindo com APNs puro."
+          fi
+
+      - name: Restaurar chave da App Store Connect API
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_KEY_P8_BASE64" ]; then
+            echo "::error::Secrets ASC_KEY_ID e ASC_KEY_P8_BASE64 são obrigatórios."
+            exit 1
+          fi
+          mkdir -p "$ASC_KEY_DIR"
+          printf '%s' "$ASC_KEY_P8_BASE64" | base64 -d > "$ASC_KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          # O altool procura chaves também em ~/private_keys.
+          mkdir -p ~/private_keys
+          cp "$ASC_KEY_DIR/AuthKey_${ASC_KEY_ID}.p8" ~/private_keys/
+
+      - name: Resolver pacotes Swift
+        working-directory: ios/App
+        run: xcodebuild -resolvePackageDependencies -project App.xcodeproj -scheme App
+
+      - name: Arquivar (assinatura automática via API key)
+        working-directory: ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE_PATH" \
+            -allowProvisioningUpdates \
+            -allowProvisioningDeviceRegistration \
+            -authenticationKeyPath "$ASC_KEY_DIR/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            | tee "$RUNNER_TEMP/xcodebuild-archive.log" | grep -E "error|warning: |Archive Succeeded|BUILD" || true
+          test -d "$ARCHIVE_PATH" || { echo "::error::Arquivo .xcarchive não gerado; veja o log."; tail -n 200 "$RUNNER_TEMP/xcodebuild-archive.log"; exit 1; }
+
+      - name: Exportar IPA (método App Store Connect)
+        working-directory: ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$EXPORT_PATH" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_DIR/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          ls -la "$EXPORT_PATH"
+
+      - name: Publicar IPA como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: infusion-ios-ipa
+          path: ${{ env.EXPORT_PATH }}/*.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      # Alternativa equivalente com fastlane: `fastlane pilot upload --api_key_path key.json --ipa App.ipa`.
+      - name: Enviar ao TestFlight (altool)
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          IPA=$(ls "$EXPORT_PATH"/*.ipa | head -n 1)
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA" \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Limpar chave privada
+        if: always()
+        run: rm -rf "$ASC_KEY_DIR" ~/private_keys
