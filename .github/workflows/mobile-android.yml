@@ -49,8 +49,10 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Android SDK
-        uses: android-actions/setup-android@v3
+      # O runner ubuntu-latest já traz o Android SDK em $ANDROID_HOME; a action setup-android
+      # quebrou ao pedir o pacote 'tools' (removido do SDK). Só aceitamos as licenças.
+      - name: Licenças do Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
 
       - name: Cache do Gradle
         uses: gradle/actions/setup-gradle@v4
