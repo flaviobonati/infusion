@@ -106,8 +106,11 @@ jobs:
           retention-days: 30
 
       # Envio para a faixa interna do Play só quando a conta de serviço estiver configurada.
+      # O Google exige que a PRIMEIRA AAB de um app seja enviada à mão pelo console; até lá o envio
+      # automático falha com "The caller does not have permission" e não pode derrubar a build.
       - name: Enviar para o Google Play (faixa internal)
         if: env.HAS_PLAY_SERVICE_ACCOUNT == 'true'
+        continue-on-error: true
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
